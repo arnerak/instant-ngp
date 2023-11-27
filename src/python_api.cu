@@ -259,6 +259,116 @@ py::array_t<float> Testbed::screenshot(bool linear, bool front_buffer) const {
 }
 #endif
 
+pybind11::array_t<uint8_t> Testbed::Nerf::get_density_grid() const
+{
+	auto grid_mip_offset = [](uint32_t mip)
+	{
+		return (128 * 128 * 128) * mip;
+	};
+
+	const int grid_size = ngp::NERF_GRIDSIZE();
+	const int size = density_grid_bitfield.bytes();
+
+	// allocate memory for density bitfield
+	uint8_t *density_grid = new uint8_t[size];
+	density_grid_bitfield.copy_to_host(density_grid);
+
+	float grid_size_f = (float)grid_size;
+
+	py::array_t<uint8_t> result(size * 8);
+	py::buffer_info buf = result.request();
+	uint8_t* data = (uint8_t*)buf.ptr;
+
+	// std::vector<uint8_t> density_grid_mips{};
+	// density_grid_mips.reserve(size * 8);
+
+	size_t i = 0;
+
+	for (int mip = 0; mip < 8; mip++)
+	{
+		int mip_size = grid_size / (1 << mip);
+		int num_cells_set = 0;
+
+		for (int z = 0; z < grid_size; z++)
+		{
+			float zz = (z / grid_size_f - 0.5f) * (1 << mip) + 0.5f;
+			for (int y = 0; y < grid_size; y++)
+			{
+				float yy = (y / grid_size_f - 0.5f) * (1 << mip) + 0.5f;
+				for (int x = 0; x < grid_size; x++)
+				{
+					float xx = (x / grid_size_f - 0.5f) * (1 << mip) + 0.5f;
+					vec3 pos{xx, yy, zz};
+					auto idx = cascaded_grid_idx_at(pos, mip);
+					uint8_t density_byte = density_grid[idx / 8 + grid_mip_offset(mip) / 8];
+					bool is_bit_set = density_byte & (1UL << (idx % 8));
+					num_cells_set += is_bit_set;
+					data[i++] = is_bit_set;
+					//density_grid_mips.push_back(is_bit_set);
+				}
+			}
+		}
+
+		printf("num cells set for mip %d: %d\n", mip, num_cells_set);
+	}
+
+	return result;
+
+	// std::ofstream file;
+	// file.open(filename, std::ios::binary);
+	// file.write((char*)density_grid_mips.data(), density_grid_mips.size());
+	// file.close();
+}
+
+void Testbed::Nerf::set_density_grid(pybind11::array_t<uint8_t> density_grid_mips) 
+{
+	constexpr int grid_size = ngp::NERF_GRIDSIZE();
+
+	auto grid_mip_offset = [](uint32_t mip)
+	{
+		return (grid_size * grid_size * grid_size) * mip;
+	};
+	
+	const int size = density_grid_bitfield.bytes();
+
+	// allocate memory for density bitfield
+	uint8_t *density_grid = new uint8_t[size]{ 0 };
+
+	float grid_size_f = (float)grid_size;
+
+	py::buffer_info buf = density_grid_mips.request();
+	uint8_t* data = (uint8_t*)buf.ptr;
+
+	for (int mip = 0; mip < 8; mip++)
+	{
+		int num_cells_set = 0;
+
+		for (int z = 0; z < grid_size; z++)
+		{
+			float zz = (z / grid_size_f - 0.5f) * (1 << mip) + 0.5f;
+			for (int y = 0; y < grid_size; y++)
+			{
+				float yy = (y / grid_size_f - 0.5f) * (1 << mip) + 0.5f;
+				for (int x = 0; x < grid_size; x++)
+				{
+					float xx = (x / grid_size_f - 0.5f) * (1 << mip) + 0.5f;
+					vec3 pos{xx, yy, zz};
+					auto idx = cascaded_grid_idx_at(pos, mip);
+					uint8_t density_byte = density_grid[idx / 8 + grid_mip_offset(mip) / 8];
+					bool is_bit_set = data[x + y * 128 + z * 128 * 128 + mip * 128 * 128 * 128];
+					num_cells_set += is_bit_set;
+					density_byte = density_byte | (is_bit_set << (idx % 8));
+					density_grid[idx / 8 + grid_mip_offset(mip) / 8] = density_byte;
+				}
+			}
+		}
+
+		printf("num cells set for mip %d: %d\n", mip, num_cells_set);
+	}
+
+	density_grid_bitfield.copy_from_host(density_grid);
+}
+
 PYBIND11_MODULE(pyngp, m) {
 	m.doc() = "Instant neural graphics primitives";
 
@@ -597,6 +707,8 @@ PYBIND11_MODULE(pyngp, m) {
 		.def("set_rendering_extra_dims_from_training_view", &Testbed::Nerf::set_rendering_extra_dims_from_training_view, "Set the extra dims that are used for rendering to those that were trained for a given training view.")
 		.def("set_rendering_extra_dims", &Testbed::Nerf::set_rendering_extra_dims, "Set the extra dims that are used for rendering.")
 		.def("get_rendering_extra_dims", &Testbed::Nerf::get_rendering_extra_dims_cpu, "Get the extra dims that are currently used for rendering.")
+		.def("get_density_grid", &Testbed::Nerf::get_density_grid, "Get the density grid X * Y * Z * MIP")
+		.def("set_density_grid", &Testbed::Nerf::set_density_grid, py::arg("density_grid"), "Set the density grid X * Y * Z * MIP")
 		;
 
 	py::class_<BRDFParams> brdfparams(m, "BRDFParams");

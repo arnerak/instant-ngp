@@ -773,6 +773,11 @@ public:
 		void set_rendering_extra_dims_from_training_view(int trainview);
 		void set_rendering_extra_dims(const std::vector<float>& vals);
 		std::vector<float> get_rendering_extra_dims_cpu() const;
+
+		#ifdef NGP_PYTHON
+			pybind11::array_t<uint8_t> get_density_grid() const;
+			void set_density_grid(pybind11::array_t<uint8_t> density_grid); 
+		#endif
 	} m_nerf;
 
 	struct Sdf {
